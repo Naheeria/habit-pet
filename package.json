@@ -44,24 +44,15 @@
       "shortcutName": "Habit-Pet"
     },
     "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "universal"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "universal"
-          ]
-        }
-      ],
-      "icon": "resources/icon.icns",
-      "category": "public.app-category.productivity",
-      "identity": null
+  "target": [
+    {
+      "target": "dmg",
+      "arch": "arm64"
     }
+  ],
+  "category": "public.app-category.productivity",
+  "identity": null
+}
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
