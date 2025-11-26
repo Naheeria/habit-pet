@@ -1,17 +1,20 @@
 /* eslint-disable */
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, X, Plus, Check, Trash2, Upload, MessageSquare, Library, Crown, UserPlus, ArrowRightLeft, Eraser, GripVertical } from 'lucide-react';
+import { Settings, X, Plus, Check, Trash2, Upload, MessageSquare, Library, Crown, UserPlus, ArrowRightLeft, Eraser, GripVertical, Download, FileJson, Bell } from 'lucide-react';
 
 /**
- * Habit-Pet Widget v5.1 (Crash Fix Edition)
- * [긴급 패치]
- * 1. 데이터 마이그레이션: 구버전 데이터(image 문자열)를 신버전(images 객체)으로 자동 변환하여 '흰 화면/투명 화면' 크러시 해결
- * 2. 안전장치 추가: 데이터가 손상되어 있어도 앱이 켜지도록 방어 코드 추가
+ * Habit-Pet Widget v5.3 (Update Notification)
+ * [추가 기능]
+ * 1. 업데이트 공지 모달 추가
+ * 2. 버전 체크 로직 (LocalStorage를 사용하여 버전당 1회만 노출)
+ * 3. 외부 링크(포스타입) 이동 기능
  */
 
 // --- 상수 및 설정 ---
 const MAX_LEVEL = 10;
+const CURRENT_APP_VERSION = "1.0.0"; // 현재 앱 버전 (배포할 때마다 올려주세요)
+const POSTYPE_URL = "https://posty.pe/b0nmjv"; // 님의 포스타입 주소로 바꾸세요
 
 const PASTEL_THEMES = [
   { id: 'cream', name: 'Cream', code: '#fdfbf7', border: '#e7e5e4' },
@@ -38,7 +41,7 @@ interface Todo {
 interface Pet {
   id: string;
   name: string;
-  images: Record<number, string | null>; // 레벨별 이미지 저장소
+  images: Record<number, string | null>;
   themeId: string;
   level: number;
   currentXP: number;
@@ -73,30 +76,23 @@ const INITIAL_PETS: Pet[] = [
 ];
 
 export default function App() {
-  // --- Global State (Safe Loading) ---
+  // --- Global State ---
   const [pets, setPets] = useState<Pet[]>(() => {
     try {
       const saved = localStorage.getItem('habit_pets');
       if (!saved) return INITIAL_PETS;
-      
       const parsed = JSON.parse(saved);
-      
-      // [데이터 마이그레이션] 구버전 데이터가 있으면 신버전 포맷으로 변환
       return parsed.map((p: any) => {
-        // 만약 images 객체가 없으면 생성
         if (!p.images) {
           const newImages = { ...initialImages };
-          // 구버전의 단일 image가 있다면 Lv.1 이미지로 할당
-          if (p.image) {
-            newImages[1] = p.image;
-          }
+          if (p.image) newImages[1] = p.image;
           return { ...p, images: newImages };
         }
         return p;
       });
     } catch (e) {
       console.error("Data Load Error:", e);
-      return INITIAL_PETS; // 에러 나면 초기화
+      return INITIAL_PETS; 
     }
   });
   
@@ -117,18 +113,49 @@ export default function App() {
   const [isBouncing, setIsBouncing] = useState(false);
   const [levelUpModal, setLevelUpModal] = useState<number | null>(null);
   const [draggedItemIndex, setDraggedItemIndex] = useState<number | null>(null); 
+  
+  // [NEW] 업데이트 알림 모달 상태
+  const [updateInfo, setUpdateInfo] = useState<{ version: string, message: string } | null>(null);
 
   const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({});
+  const importInputRef = useRef<HTMLInputElement>(null);
 
-  // 안전한 펫 접근 (없으면 첫 번째 펫)
   const activePet = pets.find(p => p.id === activePetId) || pets[0];
-  // 안전한 테마 접근
   const currentTheme = PASTEL_THEMES.find(t => t.id === (activePet?.themeId || 'cream')) || PASTEL_THEMES[0];
 
   // --- Effects ---
   useEffect(() => { localStorage.setItem('habit_pets', JSON.stringify(pets)); }, [pets]);
   useEffect(() => { localStorage.setItem('habit_active_id', activePetId); }, [activePetId]);
   useEffect(() => { localStorage.setItem('habit_todos', JSON.stringify(todos)); }, [todos]);
+
+  // [NEW] 버전 체크 로직 (앱 시작 시 실행)
+  useEffect(() => {
+    const checkForUpdates = async () => {
+      try {
+        // 1. 깃허브 등에 올려둔 version.json 파일을 읽어옵니다.
+        // (지금은 테스트를 위해 주석 처리하고, 가짜 데이터를 씁니다.)
+        // const response = await fetch('https://raw.githubusercontent.com/YOUR_ID/habit-pet/main/version.json');
+        // const data = await response.json();
+        
+        // [테스트용 가짜 데이터] 나중에 실제 URL로 교체하세요!
+        const data = { 
+          latestVersion: "1.0.0", // 여기를 1.0.1로 바꾸면 알림이 뜹니다.
+          message: "새로운 기능이 추가되었어요!" 
+        };
+
+        const lastSeenVersion = localStorage.getItem('last_seen_update_version');
+
+        // 로직: 최신 버전이 내 버전보다 높고 && 내가 이 버전에 대해 '확인'을 안 눌렀다면?
+        if (data.latestVersion > CURRENT_APP_VERSION && lastSeenVersion !== data.latestVersion) {
+          setUpdateInfo({ version: data.latestVersion, message: data.message });
+        }
+      } catch (error) {
+        console.error("Update check failed", error);
+      }
+    };
+
+    checkForUpdates();
+  }, []);
 
   // --- Helpers ---
   const updateActivePet = (updates: Partial<Pet>) => {
@@ -137,9 +164,8 @@ export default function App() {
 
   const getMaxXP = (level: number) => level * 100;
 
-  // [안전장치 추가] 이미지 가져오기 함수
   const getPetImage = (pet: Pet, level: number): string | null => {
-    if (!pet || !pet.images) return null; // 데이터 방어
+    if (!pet || !pet.images) return null; 
     for (let l = level; l >= 1; l--) {
       if (pet.images[l]) return pet.images[l];
     }
@@ -165,6 +191,34 @@ export default function App() {
         console.error("이미지 변환 실패", err);
       }
     }
+  };
+
+  const handleExportPet = (pet: Pet) => {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(pet));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", `${pet.name}_data.json`);
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+  };
+
+  const handleImportPet = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const importedPet = JSON.parse(event.target?.result as string);
+        if (!importedPet.name || !importedPet.dialogues) { alert("올바른 펫 데이터 파일이 아닙니다."); return; }
+        const newPet = { ...importedPet, id: Date.now().toString(), currentXP: 0, level: 1 };
+        setPets(prev => [...prev, newPet]);
+        setActivePetId(newPet.id);
+        alert(`${newPet.name} 친구를 데려왔어요!`);
+      } catch (err) { console.error(err); alert("파일을 읽는데 실패했습니다."); }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
   };
 
   // --- Logic ---
@@ -209,6 +263,22 @@ export default function App() {
     newTodos.splice(dropIndex, 0, draggedItem);
     setTodos(newTodos);
     setDraggedItemIndex(null);
+  };
+
+  // [NEW] 업데이트 확인 버튼 클릭 시 (무시하기)
+  const handleCloseUpdate = () => {
+    if (updateInfo) {
+      // 이 버전을 봤다고 저장함 -> 다음부터 이 버전 알림 안 뜸
+      localStorage.setItem('last_seen_update_version', updateInfo.version);
+      setUpdateInfo(null);
+    }
+  };
+
+  // [NEW] 업데이트 하러 가기 (브라우저 열기)
+  const handleGoToUpdate = () => {
+    // 일렉트론에서 외부 링크 열기 (보안상 window.open 보다 shell.openExternal이 좋지만, 여기선 렌더러라 window.open 사용)
+    window.open(POSTYPE_URL, '_blank');
+    handleCloseUpdate(); // 열면서 알림도 닫음
   };
 
   // --- Styles ---
@@ -301,6 +371,31 @@ export default function App() {
           </div>
         </div>
 
+        {/* [NEW] Update Notification Modal */}
+        {updateInfo && (
+          <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+            <div className="bg-white rounded-3xl p-6 text-center shadow-2xl animate-popIn max-w-[280px]">
+              <div className="flex justify-center mb-4">
+                <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center animate-bounce">
+                  <Bell size={32} className="text-blue-500 fill-blue-200"/>
+                </div>
+              </div>
+              <h2 className="text-xl font-black text-gray-800 mb-1">업데이트가 있어요!</h2>
+              <p className="text-xs text-gray-500 mb-1">v{updateInfo.version}</p>
+              <p className="text-sm text-gray-600 mb-5 word-keep">{updateInfo.message || "포스타입에서 새로 받아주세요!"}</p>
+              
+              <div className="flex flex-col gap-2">
+                <button onClick={handleGoToUpdate} className="w-full py-2.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded-xl font-bold shadow-md transition-colors">
+                  다운로드 하러 가기
+                </button>
+                <button onClick={handleCloseUpdate} className="w-full py-2.5 text-gray-400 hover:text-gray-600 text-xs font-medium hover:bg-gray-100 rounded-xl transition-colors">
+                  나중에 할게요 (닫기)
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Level Up Modal */}
         {levelUpModal && ( <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}><div className="bg-white rounded-3xl p-6 text-center shadow-2xl animate-popIn max-w-[280px]"><div className="flex justify-center mb-4"><div className="w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center animate-bounce"><Crown size={40} className="text-yellow-500 fill-yellow-200"/></div></div><h2 className="text-2xl font-black text-gray-800 mb-1">LEVEL UP!</h2><p className="text-gray-500 text-sm mb-4">{levelUpModal === MAX_LEVEL ? "최고 레벨 달성! 축하해!" : `레벨 ${levelUpModal}로 성장했어!`}</p><button onClick={() => setLevelUpModal(null)} className="w-full py-2 bg-gradient-to-r from-blue-400 to-purple-400 text-white rounded-xl font-bold shadow-md hover:shadow-lg transform active:scale-95 transition-all">멋져!</button></div></div> )}
 
@@ -340,10 +435,35 @@ export default function App() {
                       <div key={pet.id} className={`flex items-center p-2 rounded-xl border transition-all ${activePetId === pet.id ? 'bg-blue-50 border-blue-300 ring-1 ring-blue-300' : 'bg-white border-gray-200 hover:border-gray-300'}`}>
                         <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center overflow-hidden flex-shrink-0 mr-3">{thumbImage ? <img src={thumbImage} className="w-full h-full object-cover"/> : <span className="text-xs">?</span>}</div>
                         <div className="flex-1"><div className="flex items-center"><span className="text-sm font-bold text-gray-700 mr-2">{pet.name}</span>{pet.level >= MAX_LEVEL && <Crown size={10} className="text-yellow-500 fill-yellow-500"/>}</div><span className="text-[10px] text-gray-400">Lv.{pet.level} {pet.level >= MAX_LEVEL ? '(Max)' : ''}</span></div>
-                        {activePetId !== pet.id ? (<div className="flex space-x-1"><button onClick={() => { setActivePetId(pet.id); triggerSpeech("나 왔다!"); }} className="p-1.5 text-blue-500 hover:bg-blue-100 rounded-lg"><ArrowRightLeft size={14} /></button><button onClick={() => handleDeletePet(pet.id)} className="p-1.5 text-red-400 hover:bg-red-100 rounded-lg"><Trash2 size={14} /></button></div>) : <span className="text-[10px] font-bold text-blue-500 bg-blue-100 px-2 py-1 rounded-md">키우는 중</span>}
+                        {activePetId !== pet.id ? (
+                          <div className="flex space-x-1">
+                            <button onClick={() => { setActivePetId(pet.id); triggerSpeech("나 왔다!"); }} className="p-1.5 text-blue-500 hover:bg-blue-100 rounded-lg"><ArrowRightLeft size={14} /></button>
+                            {/* Export Button */}
+                            <button onClick={() => handleExportPet(pet)} className="p-1.5 text-green-500 hover:bg-green-100 rounded-lg" title="내보내기"><Download size={14} /></button>
+                            <button onClick={() => handleDeletePet(pet.id)} className="p-1.5 text-red-400 hover:bg-red-100 rounded-lg"><Trash2 size={14} /></button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center space-x-2">
+                             <span className="text-[10px] font-bold text-blue-500 bg-blue-100 px-2 py-1 rounded-md">키우는 중</span>
+                             <button onClick={() => handleExportPet(pet)} className="p-1.5 text-green-500 hover:bg-green-100 rounded-lg" title="내보내기"><Download size={14} /></button>
+                          </div>
+                        )}
                       </div>
                     )})}</div>
-                    <button onClick={handleCreatePet} className="w-full py-3 mt-4 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center text-gray-500 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 transition-colors gap-2"><UserPlus size={16} /><span className="text-xs font-bold">입양하기</span></button>
+                    
+                    {/* Import & Create Buttons */}
+                    <div className="grid grid-cols-2 gap-2 mt-4">
+                      <button onClick={() => importInputRef.current?.click()} className="py-3 border-2 border-dashed border-green-300 rounded-xl flex items-center justify-center text-green-500 hover:bg-green-50 transition-colors gap-1">
+                        <FileJson size={16} />
+                        <span className="text-xs font-bold">가져오기</span>
+                      </button>
+                      <input type="file" ref={importInputRef} hidden accept=".json" onChange={handleImportPet} />
+
+                      <button onClick={handleCreatePet} className="py-3 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center text-gray-500 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 transition-colors gap-1">
+                        <UserPlus size={16} />
+                        <span className="text-xs font-bold">새 친구</span>
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
