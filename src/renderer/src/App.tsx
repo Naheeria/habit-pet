@@ -4,17 +4,17 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Settings, X, Plus, Check, Trash2, Upload, MessageSquare, Library, Crown, UserPlus, ArrowRightLeft, Eraser, GripVertical, Download, FileJson, Bell, Edit2 } from 'lucide-react';
 
 /**
- * Habit-Pet Widget v5.3 (Update Notification)
+ * Habit-Pet Widget v5.4 (Level Dialogue Edition)
  * [추가 기능]
- * 1. 업데이트 공지 모달 추가
- * 2. 버전 체크 로직 (LocalStorage를 사용하여 버전당 1회만 노출)
- * 3. 외부 링크(포스타입) 이동 기능
+ * 1. 레벨별 대사 시스템 추가 ([Lv.3] 대사내용)
+ * 2. 현재 레벨에 맞는 '가장 높은 구간'의 대사만 출력
+ * 3. 태그가 없는 기존 대사는 자동으로 Lv.1로 간주 (마이그레이션 불필요)
  */
 
 // --- 상수 및 설정 ---
 const MAX_LEVEL = 10;
-const CURRENT_APP_VERSION = "1.0.1"; // 현재 앱 버전 (배포할 때마다 올려주세요)
-const POSTYPE_URL = "https://posty.pe/b0nmjv"; // 님의 포스타입 주소로 바꾸세요
+const CURRENT_APP_VERSION = "1.0.3"; // 버전업 (필요시 수정)
+const POSTYPE_URL = "https://posty.pe/b0nmjv";
 
 const PASTEL_THEMES = [
   { id: 'cream', name: 'Cream', code: '#fdfbf7', border: '#e7e5e4' },
@@ -74,6 +74,40 @@ const INITIAL_PETS: Pet[] = [
     dialogues: { ...DEFAULT_DIALOGUES }
   }
 ];
+
+// [NEW] 특정 레벨 구간에 맞는 대사만 필터링하는 도우미 함수
+const getAvailableDialogues = (dialogueList: string[], currentLevel: number) => {
+  const validList = dialogueList.filter(text => text && text.trim() !== "");
+  if (validList.length === 0) return [];
+
+  // 1. 텍스트를 분석하여 요구 레벨과 실제 대사 분리
+  const parsedList = validList.map(rawText => {
+    // [Lv.3] 또는 [lv3] 또는 [LV. 5] 등 다양한 형식 매칭
+    const match = rawText.match(/^\[lv\.?\s*(\d+)\]\s*(.*)/i);
+    if (match) {
+      return { reqLevel: parseInt(match[1], 10), text: match[2].trim() };
+    }
+    // 태그가 없으면 기본적으로 1레벨부터 나오는 대사로 간주
+    return { reqLevel: 1, text: rawText.trim() };
+  });
+
+  // 2. 현재 펫 레벨 이하에서 해금된 대사들만 추림
+  const unlockedDialogues = parsedList.filter(d => d.reqLevel <= currentLevel);
+
+  if (unlockedDialogues.length === 0) {
+    // 혹시라도 조건에 맞는 게 없다면 (예: 전부 Lv.5 대사인데 펫이 Lv.1인 경우)
+    return parsedList.map(d => d.text); 
+  }
+
+  // 3. 해금된 대사들 중 '가장 높은 요구 레벨'을 찾음
+  const maxReqLevel = Math.max(...unlockedDialogues.map(d => d.reqLevel));
+
+  // 4. 가장 높은 구간의 대사들만 필터링하여 리턴 (이전 구간 대사 덮어쓰기 효과)
+  const targetDialogues = unlockedDialogues.filter(d => d.reqLevel === maxReqLevel);
+
+  return targetDialogues.map(d => d.text);
+};
+
 
 export default function App() {
   // --- Global State ---
@@ -146,26 +180,14 @@ export default function App() {
   useEffect(() => { localStorage.setItem('habit_active_id', activePetId); }, [activePetId]);
   useEffect(() => { localStorage.setItem('habit_todos', JSON.stringify(todos)); }, [todos]);
 
-  // [NEW] 버전 체크 로직 (앱 시작 시 실행)
+  // [버전 체크 로직]
   useEffect(() => {
     const checkForUpdates = async () => {
       try {
-        // 1. [주석 해제 & 수정] 깃허브에 있는 version.json 읽어오기
-        // 'YOUR_GITHUB_ID'를 님의 깃허브 아이디로 꼭 바꾸세요!
         const response = await fetch('https://raw.githubusercontent.com/Naheeria/habit-pet/refs/heads/main/version.json');
         const data = await response.json();
-        
-        // 2. [삭제/주석처리] 테스트용 가짜 데이터는 이제 필요 없습니다.
-        /*
-        const data = { 
-          latestVersion: "1.0.0",
-          message: "새로운 기능이 추가되었어요!" 
-        };
-        */
-
         const lastSeenVersion = localStorage.getItem('last_seen_update_version');
 
-        // 로직: 최신 버전이 내 버전보다 높고 && 아직 확인 안 한 버전이라면?
         if (data.latestVersion > CURRENT_APP_VERSION && lastSeenVersion !== data.latestVersion) {
           setUpdateInfo({ version: data.latestVersion, message: data.message });
         }
@@ -173,7 +195,6 @@ export default function App() {
         console.error("Update check failed", error);
       }
     };
-
     checkForUpdates();
   }, []);
 
@@ -245,7 +266,17 @@ export default function App() {
   const handleCloseApp = () => { window.close(); };
   const triggerSpeech = (text: string, duration = 3000) => { setSpeechBubble(text); setShowSpeech(true); setTimeout(() => setShowSpeech(false), duration); };
   const triggerBounce = () => { setIsBouncing(true); setTimeout(() => setIsBouncing(false), 600); };
-  const playDialogue = (type: string) => { const list = activePet.dialogues[type] || activePet.dialogues.normal; if (list.length > 0) { triggerSpeech(list[Math.floor(Math.random() * list.length)]); } };
+  
+  // [수정됨] 대사 출력 시 필터링 함수(getAvailableDialogues)를 거치도록 변경
+  const playDialogue = (type: string) => { 
+    const list = activePet.dialogues[type] || activePet.dialogues.normal; 
+    if (list.length > 0) { 
+      const availableList = getAvailableDialogues(list, activePet.level);
+      if (availableList.length > 0) {
+        triggerSpeech(availableList[Math.floor(Math.random() * availableList.length)]); 
+      }
+    } 
+  };
 
   const addPoints = (amount: number) => {
     if (activePet.level >= MAX_LEVEL && amount > 0) { triggerBounce(); playDialogue('happy'); return; }
@@ -285,20 +316,16 @@ export default function App() {
     setDraggedItemIndex(null);
   };
 
-  // [NEW] 업데이트 확인 버튼 클릭 시 (무시하기)
   const handleCloseUpdate = () => {
     if (updateInfo) {
-      // 이 버전을 봤다고 저장함 -> 다음부터 이 버전 알림 안 뜸
       localStorage.setItem('last_seen_update_version', updateInfo.version);
       setUpdateInfo(null);
     }
   };
 
-  // [NEW] 업데이트 하러 가기 (브라우저 열기)
   const handleGoToUpdate = () => {
-    // 일렉트론에서 외부 링크 열기 (보안상 window.open 보다 shell.openExternal이 좋지만, 여기선 렌더러라 window.open 사용)
     window.open(POSTYPE_URL, '_blank');
-    handleCloseUpdate(); // 열면서 알림도 닫음
+    handleCloseUpdate(); 
   };
 
   // --- Styles ---
@@ -375,25 +402,28 @@ export default function App() {
                   onDragStart={() => onDragStart(index)}
                   onDragOver={onDragOver}
                   onDrop={() => onDrop(index)}
-                  // [수정됨] 수정 중일 때 배경색 살짝 변경
-                  className={`flex items-center group p-1 rounded-lg transition-all ${draggedItemIndex === index ? 'dragging' : ''} ${editingId === todo.id ? 'bg-blue-50 ring-1 ring-blue-200' : ''}`}
+                  // 1. 패딩을 p-1.5 -> p-1로 줄이고, items-start -> items-center로 원복
+                  className={`flex items-center group p-1 rounded-lg transition-all ${draggedItemIndex === index ? 'dragging' : ''} ${editingId === todo.id ? 'bg-blue-50 ring-1 ring-blue-200' : 'hover:bg-gray-50'}`}
                 >
-                  <GripVertical size={14} className="text-gray-300 mr-1 cursor-move opacity-50 group-hover:opacity-100" />
+                  {/* 2. 아이콘의 불필요한 위쪽 여백(mt-1) 제거 */}
+                  <div className="mr-1 cursor-move opacity-50 group-hover:opacity-100">
+                    <GripVertical size={14} className="text-gray-300" />
+                  </div>
                   
-                  {/* 체크 버튼 */}
+                  {/* 체크 버튼 (mt-0.5 제거) */}
                   <button onClick={() => handleToggleTodo(todo.id)} className={`flex-shrink-0 w-5 h-5 rounded-full mr-2 flex items-center justify-center border transition-all duration-200 ${todo.completed ? 'bg-green-400 border-green-400' : 'bg-white border-gray-300 hover:border-green-400'}`}>
                     {todo.completed && <Check size={12} className="text-white" />}
                   </button>
 
-                  {/* [핵심] 수정 모드면 Input, 아니면 Text 보여주기 */}
+                  {/* 텍스트 / 인풋 영역 (자동 줄바꿈은 그대로 유지) */}
                   {editingId === todo.id ? (
                     <input 
                       autoFocus
                       type="text" 
                       value={editText}
                       onChange={(e) => setEditText(e.target.value)}
-                      onBlur={() => saveEdit(todo.id)} // 포커스 잃으면 저장
-                      onKeyDown={(e) => { if(e.key === 'Enter') saveEdit(todo.id); }} // 엔터 치면 저장
+                      onBlur={() => saveEdit(todo.id)} 
+                      onKeyDown={(e) => { if(e.key === 'Enter') saveEdit(todo.id); }} 
                       className="flex-1 text-sm bg-transparent outline-none border-b border-blue-400 text-gray-700 min-w-0"
                     />
                   ) : (
@@ -402,16 +432,14 @@ export default function App() {
                     </span>
                   )}
 
-                  {/* 버튼 그룹 (수정/삭제) */}
-                  <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity ml-1">
-                    {/* 수정 버튼 (수정 중이 아닐 때만 보임) */}
+                  {/* 3. 버튼 그룹 영역 수정 (위아래 정렬 삭제하고 가로 정렬로 강제 고정) */}
+                  <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity ml-1 space-x-1">
                     {editingId !== todo.id && (
-                      <button onClick={() => startEditing(todo.id, todo.text)} className="text-gray-300 hover:text-blue-400 p-1" title="수정">
+                      <button onClick={() => startEditing(todo.id, todo.text)} className="text-gray-300 hover:text-blue-400 p-0.5" title="수정">
                         <Edit2 size={14} />
                       </button>
                     )}
-                    {/* 삭제 버튼 */}
-                    <button onClick={() => setTodos(prev => prev.filter(t => t.id !== todo.id))} className="text-gray-300 hover:text-red-400 p-1" title="삭제">
+                    <button onClick={() => setTodos(prev => prev.filter(t => t.id !== todo.id))} className="text-gray-300 hover:text-red-400 p-0.5" title="삭제">
                       <Trash2 size={14} />
                     </button>
                   </div>
@@ -425,7 +453,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* [NEW] Update Notification Modal */}
+        {/* Update Notification Modal */}
         {updateInfo && (
           <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
             <div className="bg-white rounded-3xl p-6 text-center shadow-2xl animate-popIn max-w-[280px]">
@@ -479,7 +507,16 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                {settingsTab === 'dialogue' && ( <div className="space-y-6"><p className="text-[10px] text-gray-400 bg-blue-50 p-2 rounded-lg">💡 줄바꿈으로 문장을 구분해주세요.</p>{[{ key: 'normal', label: '평상시', color: 'text-gray-600' }, { key: 'happy', label: '성공', color: 'text-green-600' }, { key: 'sad', label: '취소', color: 'text-blue-600' }].map(section => (<div key={section.key}><label className={`text-xs font-bold mb-1 flex items-center ${section.color}`}>{section.label}</label><textarea value={activePet.dialogues[section.key]?.join('\n') || ''} onChange={(e) => { const newDialogues = { ...activePet.dialogues, [section.key]: e.target.value.split('\n') }; updateActivePet({ dialogues: newDialogues }); }} className="w-full h-20 border rounded-xl p-2 text-xs focus:ring-2 focus:ring-blue-100 outline-none bg-white resize-none" placeholder="대사를 입력하세요..." /></div>))}</div> )}
+                {settingsTab === 'dialogue' && ( 
+                  <div className="space-y-6">
+                    {/* [수정됨] 대사 도움말 수정 */}
+                    <div className="text-[10px] text-gray-500 bg-blue-50 p-3 rounded-lg leading-relaxed border border-blue-100">
+                      💡 <strong>줄바꿈</strong>으로 문장을 구분해주세요.<br/>
+                      💡 <strong className="text-blue-500">[Lv.3] 대사내용</strong> 처럼 입력하면 특정 레벨 도달 시 대사가 해금됩니다. (지정 안 하면 Lv.1 기본 대사)
+                    </div>
+                    {[{ key: 'normal', label: '평상시', color: 'text-gray-600' }, { key: 'happy', label: '성공', color: 'text-green-600' }, { key: 'sad', label: '취소', color: 'text-blue-600' }].map(section => (<div key={section.key}><label className={`block text-xs font-bold mb-1 flex items-center ${section.color}`}>{section.label}</label><textarea value={activePet.dialogues[section.key]?.join('\n') || ''} onChange={(e) => { const newDialogues = { ...activePet.dialogues, [section.key]: e.target.value.split('\n') }; updateActivePet({ dialogues: newDialogues }); }} className="w-full h-20 border rounded-xl p-2 text-xs focus:ring-2 focus:ring-blue-100 outline-none bg-white resize-none" placeholder="대사를 입력하세요..." /></div>))}
+                  </div> 
+                )}
                 {settingsTab === 'library' && (
                   <div className="space-y-4">
                     <div className="flex justify-between items-end mb-2"><h4 className="text-sm font-bold text-gray-700">나의 펫 리스트</h4><span className="text-[10px] text-gray-400">{pets.length}마리</span></div>
@@ -492,7 +529,6 @@ export default function App() {
                         {activePetId !== pet.id ? (
                           <div className="flex space-x-1">
                             <button onClick={() => { setActivePetId(pet.id); triggerSpeech("나 왔다!"); }} className="p-1.5 text-blue-500 hover:bg-blue-100 rounded-lg"><ArrowRightLeft size={14} /></button>
-                            {/* Export Button */}
                             <button onClick={() => handleExportPet(pet)} className="p-1.5 text-green-500 hover:bg-green-100 rounded-lg" title="내보내기"><Download size={14} /></button>
                             <button onClick={() => handleDeletePet(pet.id)} className="p-1.5 text-red-400 hover:bg-red-100 rounded-lg"><Trash2 size={14} /></button>
                           </div>
@@ -505,7 +541,6 @@ export default function App() {
                       </div>
                     )})}</div>
                     
-                    {/* Import & Create Buttons */}
                     <div className="grid grid-cols-2 gap-2 mt-4">
                       <button onClick={() => importInputRef.current?.click()} className="py-3 border-2 border-dashed border-green-300 rounded-xl flex items-center justify-center text-green-500 hover:bg-green-50 transition-colors gap-1">
                         <FileJson size={16} />

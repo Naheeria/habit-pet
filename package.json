@@ -1,6 +1,6 @@
 {
   "name": "habit-pet",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "My Cute Habit-Pet Widget",
   "main": "./out/main/index.js",
   "author": "MyName",
